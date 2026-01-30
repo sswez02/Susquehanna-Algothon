@@ -73,7 +73,7 @@ Algorithms must be contained in a file titled _main.py._
 
 To ensure that code runs smoothly on the servers used for marking, we advise the following:
 
-- Use only standard packages and their respective versions from the Anaconda library. The best way to do this is to simply download Anaconda...
+- Use only standard packages and their respective versions from the Anaconda library. The best way to do this is to simply download Anaconda.
 - Where necessary, packages that are not included as part of Anaconda, or version numbers that are greater than those provided in Anaconda need to be declared in the submission form in the relevant section.
 
 We will attempt to import and run through all non-standard packages if declared. However, in the case that your code still does not run, your team will be **disqualified**. Similarly, if your submission does not declare a non-standard package or provide a brief description of its use, it will also be **disqualified**.

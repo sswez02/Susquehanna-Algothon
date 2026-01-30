@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 import numpy as np
 import pandas as pd
 from main import getMyPosition as getPosition
@@ -12,7 +10,7 @@ dlrPosLimit = 10000
 
 def loadPrices(fn):
     global nt, nInst
-    df = pd.read_csv(fn, sep='\s+', header=None, index_col=None)
+    df = pd.read_csv(fn, sep="\s+", header=None, index_col=None)
     (nt, nInst) = df.shape
     return (df.values).T
 
@@ -49,20 +47,22 @@ def calcPL(prcHist):
         todayPLL.append(todayPL)
         value = cash + posValue
         ret = 0.0
-        if (totDVolume > 0):
+        if totDVolume > 0:
             ret = value / totDVolume
-        print("Day %d value: %.2lf todayPL: $%.2lf $-traded: %.0lf return: %.5lf" %
-              (t, value, todayPL, totDVolume, ret))
+        print(
+            "Day %d value: %.2lf todayPL: $%.2lf $-traded: %.0lf return: %.5lf"
+            % (t, value, todayPL, totDVolume, ret)
+        )
     pll = np.array(todayPLL)
     (plmu, plstd) = (np.mean(pll), np.std(pll))
     annSharpe = 0.0
-    if (plstd > 0):
+    if plstd > 0:
         annSharpe = np.sqrt(250) * plmu / plstd
     return (plmu, ret, plstd, annSharpe, totDVolume)
 
 
 (meanpl, ret, plstd, sharpe, dvol) = calcPL(prcAll)
-score = meanpl - 0.1*plstd
+score = meanpl - 0.1 * plstd
 print("=====")
 print("mean(PL): %.1lf" % meanpl)
 print("return: %.5lf" % ret)
