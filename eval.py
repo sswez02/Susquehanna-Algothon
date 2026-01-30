@@ -31,7 +31,7 @@ def calcPL(prcHist):
     (_, nt) = prcHist.shape
     for t in range(751, 1001):
         prcHistSoFar = prcHist[:, :t]
-        newPosOrig = getPosition(prcHistSoFar)
+        newPosOrig = getPosition(prcHistSoFar)  # type: ignore
         curPrices = prcHistSoFar[:, -1]
         posLimits = np.array([int(x) for x in dlrPosLimit / curPrices])
         newPos = np.clip(newPosOrig, -posLimits, posLimits)
@@ -58,7 +58,7 @@ def calcPL(prcHist):
     annSharpe = 0.0
     if plstd > 0:
         annSharpe = np.sqrt(250) * plmu / plstd
-    return (plmu, ret, plstd, annSharpe, totDVolume)
+    return (plmu, ret, plstd, annSharpe, totDVolume)  # type: ignore
 
 
 (meanpl, ret, plstd, sharpe, dvol) = calcPL(prcAll)
