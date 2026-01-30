@@ -313,7 +313,7 @@ class FeatureEngine:
         features = np.vstack(all_features)
         targets = np.concatenate(all_targets)
 
-        return features, targets, feature_set.names
+        return features, targets, feature_set.names  # type: ignore
 
 
 def get_feature_names() -> List[str]:
