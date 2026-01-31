@@ -1,24 +1,27 @@
 """
 Entry point for running experiments.
 
-Usage:
-    python run.py explore      # Data exploration
-    python run.py baseline     # Run baseline strategies
-    python run.py cv           # Cross-validation analysis
-    python run.py full         # Full experiment
-    python run.py help         # Show help
+Commands:
+    python run.py explore     - Data exploration
+    python run.py baseline    - ALL strategies comparison
+    python run.py cv          - Cross-validation
+    python run.py full        - Everything
 """
 
 import sys
 import numpy as np
-import os
 
-from config import Config, get_config
-from data import load_data, PriceData
-from backtest import BacktestEngine
-from strategies import StrategyFactory, get_all_strategies
-from validation import PurgedKFold, WalkForwardCV, cross_validate
-from metrics import compute_metrics, compute_score
+from core import (
+    Config,
+    get_config,
+    load_data,
+    PriceData,
+    compute_metrics,
+    compute_score,
+)
+from validation.backtest import BacktestEngine
+from strategies.strategies import StrategyFactory
+from validation.cv import PurgedKFold, WalkForwardCV
 from analysis import (
     analyze_data,
     print_data_analysis,
@@ -34,9 +37,7 @@ def run_exploration(data: PriceData, config: Config):
     analysis = analyze_data(data)
     print_data_analysis(analysis)
 
-    # Additional insights
-    print(" KEY INSIGHTS")
-
+    print("\n KEY INSIGHTS")
     insights = []
 
     if analysis.avg_return < 0:
@@ -45,63 +46,101 @@ def run_exploration(data: PriceData, config: Config):
         insights.append("Market is BULLISH overall")
 
     if abs(analysis.lag1_autocorr) < 0.05:
-        insights.append("Near-zero autocorrelation")
+        insights.append("Near-zero autocorrelation -> momentum won't work!")
         insights.append("Focus on relative (cross-sectional) patterns")
 
     if analysis.max_correlation > 0.5:
         insights.append(
-            f"High correlations exist ({analysis.max_correlation:.2f}) - pairs trading viable"
+            f"High correlations ({analysis.max_correlation:.2f}) -> pairs trading viable"
         )
 
     for insight in insights:
-        print(f"  {insight}")
+        print(f"  - {insight}")
 
 
 def run_baseline(data: PriceData, config: Config):
-    """Run baseline strategy comparison"""
-    print(" BASELINE STRATEGIES")
+    """Run all strategy comparison"""
+    print("ALL STRATEGIES COMPARISON")
 
-    # Get all strategies
     factory = StrategyFactory(data.prices)
+
+    # Define all strategies
     strategies = {
         "Zero (no trades)": factory.zero(),
         "Buy & Hold": factory.buy_and_hold(scale=0.3),
         "Momentum 60d": factory.momentum(lookback=60, scale=0.3),
-        "Momentum 120d": factory.momentum(lookback=120, scale=0.3),
         "Momentum 300d": factory.momentum(lookback=300, scale=0.3),
         "Mean Reversion 20d": factory.mean_reversion(lookback=20, scale=0.3),
         "Vol-Scaled": factory.volatility_scaled(momentum_lookback=300, scale=0.3),
-        "Cross-Sectional": factory.cross_sectional_momentum(lookback=60, scale=0.3),
+        "Cross-Sectional Mom": factory.cross_sectional_momentum(lookback=60, scale=0.3),
         "Combined": factory.combined(),
+        "CS Mean Reversion": factory.cross_sectional_mean_reversion(
+            lookback=10, n_long=5, n_short=5, scale=0.15
+        ),
+        "Short Bias": factory.short_bias(scale=0.1),
+        "Pairs (27,38)": factory.pairs_trading(pair1=27, pair2=38, scale=0.3),
+        "Low Volatility": factory.low_volatility(scale=0.1),
+        "Conservative Mom": factory.conservative_momentum(scale=0.05),
+        "Combined V2": factory.combined_v2(),
+        "Short Bias (0.15)": factory.short_bias(scale=0.15),
+        "Short Bias (0.20)": factory.short_bias(scale=0.20),
+        "Low-Vol Short": factory.low_vol_short_bias(scale=0.20, n_short=15),
+        "Selective Short": factory.selective_short(scale=0.2),
     }
 
     # Run backtests
     engine = BacktestEngine(data.prices, config)
 
-    results = {}
-    print(
-        f"\nRunning backtests (days {config.data.test_start}-{config.data.test_end})..."
-    )
+    print(f"\nBacktest period: days {config.data.test_start}-{config.data.test_end}")
+    print(f"\n{'Strategy':<22} {'Score':>8} {'Sharpe':>8} {'Total':>10} {'StdPL':>8}")
+    print("-" * 62)
 
+    results = {}
     for name, strategy in strategies.items():
         result = engine.run(strategy, config.data.test_start, config.data.test_end)
         results[name] = result
-
         m = result.metrics
         print(
-            f"{name:<25} Score: {m.score:>8.2f}  Sharpe: {m.sharpe:>6.2f}  "
-            f"Total: ${m.total_pnl:>8.0f}"
+            f"{name:<22} {m.score:>8.2f} {m.sharpe:>8.2f} ${m.total_pnl:>8.0f} {m.std_pnl:>8.1f}"
         )
 
-    # Best strategy
+    # Summary
     best_name = max(results.keys(), key=lambda x: results[x].metrics.score)
-    best_result = results[best_name]
+    best = results[best_name]
 
-    print(f"BEST STRATEGY: {best_name}")
-    print(f"   Score: {best_result.metrics.score:.2f}")
-    print(f"   Sharpe: {best_result.metrics.sharpe:.2f}")
+    print(f" BEST: {best_name}")
+    print(f"   Score: {best.metrics.score:.2f}")
+    print(f"   Sharpe: {best.metrics.sharpe:.2f}")
+    print(f"   Total P&L: ${best.metrics.total_pnl:.0f}")
+
+    # Show strategies that made money
+    print("\n Strategies that made money:")
+    for name, result in sorted(results.items(), key=lambda x: -x[1].metrics.total_pnl):
+        if result.metrics.total_pnl > 0:
+            print(f"   {name}: ${result.metrics.total_pnl:.0f}")
 
     return results
+
+
+def run_tune(data: PriceData, config: Config):
+    """Parameter tuning"""
+    print("\n" + "=" * 70)
+    print("PARAMETER TUNING - SHORT BIAS")
+    print("=" * 70)
+
+    factory = StrategyFactory(data.prices)
+    engine = BacktestEngine(data.prices, config)
+
+    print(f"\n{'Scale':<10} {'Score':>10} {'Sharpe':>10} {'Total':>12}")
+    print("-" * 45)
+
+    for scale in [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]:
+        strategy = factory.short_bias(scale=scale)
+        result = engine.run(strategy, config.data.test_start, config.data.test_end)
+        m = result.metrics
+        print(
+            f"{scale:<10.2f} {m.score:>10.2f} {m.sharpe:>10.2f} ${m.total_pnl:>10.0f}"
+        )
 
 
 def run_cv_analysis(data: PriceData, config: Config):
@@ -111,52 +150,40 @@ def run_cv_analysis(data: PriceData, config: Config):
     factory = StrategyFactory(data.prices)
     engine = BacktestEngine(data.prices, config)
 
-    # Test with momentum strategy
-    strategy = factory.momentum(lookback=300, scale=0.3)
+    # Test the best new strategy
+    strategy = factory.cross_sectional_mean_reversion(
+        lookback=10, n_long=5, n_short=5, scale=0.15
+    )
 
-    # Purged K-Fold
-    print("\n1. PURGED K-FOLD (5 splits)")
-
+    print("\n1. PURGED K-FOLD (CS Mean Reversion)")
     cv = PurgedKFold(n_splits=5, purge_days=10, embargo_days=5)
 
-    train_scores = []
     test_scores = []
-
     for fold, (train_idx, test_idx) in enumerate(cv.split(data.n_days)):
-        # Test on this fold
-        test_start = test_idx.min()
-        test_end = test_idx.max() + 1
-
-        if test_start >= 300:  # Need lookback for momentum
+        test_start, test_end = test_idx.min(), test_idx.max() + 1
+        if test_start >= 30:
             result = engine.run(strategy, test_start, test_end)
             score = result.metrics.score
         else:
             score = 0
-
         print(f"  Fold {fold}: Days [{test_start}-{test_end}], Score: {score:.2f}")
         test_scores.append(score)
 
-    # Walk-forward
-    print("\n2. WALK-FORWARD CV (expanding)")
-
+    print("\n2. WALK-FORWARD CV")
     cv_wf = WalkForwardCV(n_splits=5, train_size=500, test_size=100, expanding=True)
 
     wf_scores = []
     for fold, (train_idx, test_idx) in enumerate(cv_wf.split(data.n_days)):
-        test_start = test_idx.min()
-        test_end = test_idx.max() + 1
-
+        test_start, test_end = test_idx.min(), test_idx.max() + 1
         if test_start < data.n_days - 10:
             result = engine.run(strategy, test_start, min(test_end, data.n_days - 1))
             score = result.metrics.score
         else:
             score = 0
-
         print(f"  Fold {fold}: Test [{test_start}-{test_end}], Score: {score:.2f}")
         wf_scores.append(score)
 
-    # Summary
-    print("CV SUMMARY")
+    print("\nCV SUMMARY")
     print(
         f"  Purged K-Fold: Mean={np.mean(test_scores):.2f}, Std={np.std(test_scores):.2f}"
     )
@@ -164,32 +191,28 @@ def run_cv_analysis(data: PriceData, config: Config):
 
 
 def run_full_experiment(data: PriceData, config: Config):
-    """Run full experiment with all analyses"""
+    """Run full experiment"""
     print("\n" + "█" * 70)
     print("█" + " " * 68 + "█")
     print("█" + "     FULL EXPERIMENT".center(68) + "█")
     print("█" + " " * 68 + "█")
     print("█" * 70)
 
-    # 1. Data exploration
     run_exploration(data, config)
-
-    # 2. Baseline strategies
     results = run_baseline(data, config)
-
-    # 3. CV analysis
     run_cv_analysis(data, config)
 
-    # 4. Overfitting check
+    # Overfitting check
     print("OVERFITTING ANALYSIS")
 
-    # Simulate train vs test scores (using different periods)
     factory = StrategyFactory(data.prices)
     engine = BacktestEngine(data.prices, config)
-    strategy = factory.momentum(lookback=300, scale=0.3)
+    strategy = factory.cross_sectional_mean_reversion(
+        lookback=10, n_long=5, n_short=5, scale=0.15
+    )
 
     train_scores = []
-    for start, end in [(300, 450), (450, 600), (600, 750)]:
+    for start, end in [(100, 300), (300, 500), (500, 750)]:
         result = engine.run(strategy, start, end)
         train_scores.append(result.metrics.score)
 
@@ -204,79 +227,37 @@ def run_full_experiment(data: PriceData, config: Config):
         print_overfitting_diagnostics(diag)
 
     # Summary
-    print(" EXPERIMENT SUMMARY")
-
     best_name = max(results.keys(), key=lambda x: results[x].metrics.score)
     best_score = results[best_name].metrics.score
 
+    print(" SUMMARY")
     print(
         f"""
-  Data: {data.n_instruments} instruments, {data.n_days} days
-  
-  Best Baseline Strategy: {best_name}
+  Best Strategy: {best_name}
   Best Score: {best_score:.2f}
-  
-  Target Score: 50+
-  Gap to Close: {50 - best_score:.2f}
-  
-  Next Steps:
-  1. Implement ML model with proper regularization
-  2. Use purged CV for model selection
-  3. Focus on feature selection to reduce overfitting
-"""
-    )
-
-
-def show_help():
-    """Show help message"""
-    print(
-        """
-Algorithmic Trading Competition - Runner
-
-Usage:
-    python run.py <command>
-
-Commands:
-    explore     Run data exploration
-    baseline    Run baseline strategy comparison
-    cv          Run cross-validation analysis
-    full        Run full experiment
-    help        Show this help message
-
-Examples:
-    python run.py explore
-    python run.py baseline
-    python run.py full
+  Target: 50+
+  Gap: {50 - best_score:.2f}
 """
     )
 
 
 def main():
-    """Main entry point"""
-    # Parse command
     if len(sys.argv) < 2:
-        command = "help"
-    else:
-        command = sys.argv[1].lower()
-
-    if command == "help":
-        show_help()
+        print("Usage: python run.py <command>")
+        print("Commands: explore, baseline, cv, full")
         return
 
-    # Load configuration
+    command = sys.argv[1].lower()
     config = get_config()
 
-    # Load data
     print("Loading data...")
     try:
         data = load_data(config.data.data_file)
         print(f"Loaded: {data.n_instruments} instruments, {data.n_days} days")
     except FileNotFoundError:
         print(f"ERROR: {config.data.data_file} not found")
-        print("Please ensure the data file is in the current directory.")
         return
 
-    # Run command
     if command == "explore":
         run_exploration(data, config)
     elif command == "baseline":
@@ -285,9 +266,10 @@ def main():
         run_cv_analysis(data, config)
     elif command == "full":
         run_full_experiment(data, config)
+    elif command == "tune":
+        run_tune(data, config)
     else:
-        print(f"Unknown command: {command}")
-        show_help()
+        print(f"Unknown: {command}")
 
 
 if __name__ == "__main__":

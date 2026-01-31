@@ -1,42 +1,9 @@
 """
-Cross-Validation for Time Series
-
-Implements proper cross-validation for financial time series:
-
-1. PURGED K-FOLD: Removes samples too close to test set
-2. WALK-FORWARD: Always train on past, test on future
-3. COMBINATORIAL: Tests all combinations (for small datasets)
-
-Why regular k-fold fails for time series:
-- Assumes i.i.d. data (time series is NOT i.i.d.)
-- Information leakage from future to past
-- Overlapping labels cause optimistic estimates
-
-Reference: López de Prado (2018) "Advances in Financial Machine Learning"
+Cross-validation for time series
 """
 
 import numpy as np
-from typing import Generator, Tuple, List, Dict, Any, Optional
-from dataclasses import dataclass
-
-from config import Config, get_config
-
-
-@dataclass
-class CVFold:
-    """Information about a CV fold"""
-
-    fold_idx: int
-    train_indices: np.ndarray
-    test_indices: np.ndarray
-
-    @property
-    def train_size(self) -> int:
-        return len(self.train_indices)
-
-    @property
-    def test_size(self) -> int:
-        return len(self.test_indices)
+from typing import Generator, Tuple
 
 
 class PurgedKFold:
@@ -92,8 +59,6 @@ class PurgedKFold:
             test_start = i * fold_size
             test_end = (i + 1) * fold_size if i < self.n_splits - 1 else n_samples
 
-            test_idx = indices[test_start:test_end]
-
             # Build training set (excluding purge and embargo zones)
             train_mask = np.ones(n_samples, dtype=bool)
 
@@ -108,24 +73,14 @@ class PurgedKFold:
             embargo_end = min(n_samples, test_end + self.embargo_days)
             train_mask[test_end:embargo_end] = False
 
-            train_idx = indices[train_mask]
-
-            yield train_idx, test_idx
-
-    def get_folds(self, n_samples: int) -> List[CVFold]:
-        """Get list of CVFold objects"""
-        folds = []
-        for i, (train_idx, test_idx) in enumerate(self.split(n_samples)):
-            folds.append(
-                CVFold(fold_idx=i, train_indices=train_idx, test_indices=test_idx)
-            )
-        return folds
+            yield indices[train_mask], indices[test_start:test_end]
 
 
 class WalkForwardCV:
     """
     Walk-Forward Cross-Validation.
 
+    The most realistic CV for trading:
     - Always train on past data
     - Always test on future data
     - Simulates actual trading scenario
@@ -188,55 +143,14 @@ class WalkForwardCV:
             if self.expanding:
                 train_start = 0
             else:
-                train_start = test_start - self.purge_days - self.train_size
-                train_start = max(0, train_start)
+                train_start = max(0, test_start - self.purge_days - self.train_size)
 
             train_end = test_start - self.purge_days
 
-            train_idx = indices[train_start:train_end]
-            test_idx = indices[test_start:test_end]
-
-            yield train_idx, test_idx
-
-    def get_folds(self, n_samples: int) -> List[CVFold]:
-        """Get list of CVFold objects"""
-        folds = []
-        for i, (train_idx, test_idx) in enumerate(self.split(n_samples)):
-            folds.append(
-                CVFold(fold_idx=i, train_indices=train_idx, test_indices=test_idx)
-            )
-        return folds
+            yield indices[train_start:train_end], indices[test_start:test_end]
 
 
-class TimeSeriesSplit:
-    """
-    Simple time series split (no purging).
-
-    Just ensures training is always before testing.
-    Use PurgedKFold or WalkForwardCV for production.
-    """
-
-    def __init__(self, n_splits: int = 5):
-        self.n_splits = n_splits
-
-    def split(
-        self, n_samples: int
-    ) -> Generator[Tuple[np.ndarray, np.ndarray], None, None]:
-        """Generate train/test indices"""
-        indices = np.arange(n_samples)
-        fold_size = n_samples // (self.n_splits + 1)
-
-        for i in range(self.n_splits):
-            train_end = (i + 1) * fold_size
-            test_start = train_end
-            test_end = (i + 2) * fold_size if i < self.n_splits - 1 else n_samples
-
-            yield indices[:train_end], indices[test_start:test_end]
-
-
-def cross_validate(
-    cv, evaluate_func, n_samples: int, verbose: bool = True
-) -> Dict[str, Any]:
+def cross_validate(cv, evaluate_func, n_samples: int, verbose: bool = True) -> dict:
     """
     Run cross-validation with any CV splitter.
 
@@ -250,20 +164,10 @@ def cross_validate(
         Dictionary with scores and statistics
     """
     scores = []
-    fold_results = []
 
     for fold_idx, (train_idx, test_idx) in enumerate(cv.split(n_samples)):
         score = evaluate_func(train_idx, test_idx)
         scores.append(score)
-
-        fold_results.append(
-            {
-                "fold": fold_idx,
-                "train_size": len(train_idx),
-                "test_size": len(test_idx),
-                "score": score,
-            }
-        )
 
         if verbose:
             print(
@@ -273,59 +177,8 @@ def cross_validate(
 
     scores = np.array(scores)
 
-    results = {
-        "fold_results": fold_results,
+    return {
         "scores": scores,
         "mean_score": np.mean(scores),
         "std_score": np.std(scores),
-        "min_score": np.min(scores),
-        "max_score": np.max(scores),
     }
-
-    if verbose:
-        print(f"\nCV Summary:")
-        print(f"  Mean Score: {results['mean_score']:.2f} ± {results['std_score']:.2f}")
-        print(f"  Range: [{results['min_score']:.2f}, {results['max_score']:.2f}]")
-
-    return results
-
-
-if __name__ == "__main__":
-    # Test CV splitters
-    print("Testing Cross-Validation Splitters")
-
-    n_samples = 1000
-
-    # Test PurgedKFold
-    print("\n1. PURGED K-FOLD (5 splits, 10 purge, 5 embargo)")
-    cv = PurgedKFold(n_splits=5, purge_days=10, embargo_days=5)
-
-    for fold, (train, test) in enumerate(cv.split(n_samples)):
-        gap = test.min() - train.max() if len(train) > 0 else 0
-        print(
-            f"  Fold {fold}: Train={len(train):4d}, Test={len(test):3d}, Gap={gap:2d}"
-        )
-
-    # Test WalkForwardCV
-    print("\n2. WALK-FORWARD CV (expanding)")
-    cv_wf = WalkForwardCV(n_splits=5, train_size=500, test_size=100, expanding=True)
-
-    for fold, (train, test) in enumerate(cv_wf.split(n_samples)):
-        print(
-            f"  Fold {fold}: Train=[{train.min():3d}-{train.max():3d}], "
-            f"Test=[{test.min():3d}-{test.max():3d}]"
-        )
-
-    # Test WalkForwardCV rolling
-    print("\n3. WALK-FORWARD CV (rolling)")
-    cv_wf_roll = WalkForwardCV(
-        n_splits=5, train_size=300, test_size=100, expanding=False
-    )
-
-    for fold, (train, test) in enumerate(cv_wf_roll.split(n_samples)):
-        print(
-            f"  Fold {fold}: Train=[{train.min():3d}-{train.max():3d}], "
-            f"Test=[{test.min():3d}-{test.max():3d}]"
-        )
-
-    print("CV Splitters Ready")
