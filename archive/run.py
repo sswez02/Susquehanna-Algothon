@@ -235,7 +235,6 @@ def run_full_experiment(data: PriceData, config: Config):
         f"""
   Best Strategy: {best_name}
   Best Score: {best_score:.2f}
-  Target: 50+
   Gap: {50 - best_score:.2f}
 """
     )
